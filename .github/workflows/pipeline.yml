@@ -1,0 +1,105 @@
+name: CI/CD Pipeline - Payments Service
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-payments-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Pruebas y Linting Go
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Descargar módulos
+        run: go mod download
+
+      - name: Validar compilación
+        run: go vet ./...
+
+  build:
+    name: Compilar Binario Go
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Compilar para Linux AMD64
+        run: |
+          mkdir -p bin dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/payments .
+          tar -czf dist/payments-service.tar.gz bin/ README.md
+
+      - name: Subir artefacto a GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: payments-service-artifact
+          path: dist/payments-service.tar.gz
+          retention-days: 7
+
+  deploy:
+    name: Desplegar en EC2 AWS
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar artefacto
+        uses: actions/download-artifact@v4
+        with:
+          name: payments-service-artifact
+          path: ./dist
+
+      - name: Configurar llave SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Copiar artefacto a EC2 via SCP
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+        run: |
+          scp -o StrictHostKeyChecking=no ./dist/payments-service.tar.gz $USER@$HOST:/tmp/payments-service.tar.gz
+
+      - name: Ejecutar despliegue en EC2 via SSH
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $USER@$HOST << 'EOF'
+            set -e
+            TARGET_DIR="$HOME/entradas-ya/payments"
+            mkdir -p "$TARGET_DIR"
+            tar -xzf /tmp/payments-service.tar.gz -C "$TARGET_DIR"
+            rm -f /tmp/payments-service.tar.gz
+            chmod +x "$TARGET_DIR/bin/payments"
+            
+            if systemctl list-unit-files | grep -q "entradasya-payments.service"; then
+              sudo systemctl restart entradasya-payments
+              echo "Servicio entradasya-payments reiniciado."
+            fi
+            
+            echo "Despliegue de payments completado con éxito."
+          EOF
