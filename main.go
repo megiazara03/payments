@@ -138,7 +138,7 @@ func health(w http.ResponseWriter, r *http.Request) {
 		responder(w, http.StatusServiceUnavailable, map[string]string{"status": "error", "servicio": "payments", "db": "sin conexión"})
 		return
 	}
-	responder(w, http.StatusOK, map[string]string{"status": "ok", "servicio": "payments", "db": "ok"})
+	responder(w, http.StatusOK, map[string]string{"status": "ok", "servicio": "payments", "db": "ok","pileline":"ok"})
 }
 
 type pagoIn struct {
